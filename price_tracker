@@ -1,0 +1,88 @@
+import subprocess
+import sys
+
+# Lista de librerías que requiere este script
+REQUERIMIENTOS = {
+    "httpx": "httpx",
+    "bs4": "beautifulsoup4",
+    "dotenv": "python-dotenv"
+}
+
+# Verificar e instalar dependencias faltantes automáticamente
+for modulo, paquete in REQUERIMIENTOS.items():
+    try:
+        __import__(modulo)
+    except ImportError:
+        print(f"📦 Instalando {paquete} automáticamente...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", paquete])
+
+import os
+import json
+import httpx
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+# Cargar las variables desde el archivo .env local
+load_dotenv()
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+FILE_DATA = "telegram_bot/precio_guardado.json"
+
+# Validación de seguridad
+if not TOKEN or not CHAT_ID:
+    raise ValueError(
+        "❌ Faltan las variables TELEGRAM_TOKEN o TELEGRAM_CHAT_ID en el archivo .env.\n"
+        "Asegúrate de crear el archivo .env basándote en .env.example"
+    )
+
+def enviar_alerta(mensaje: str):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
+    httpx.post(url, json=payload)
+
+def obtener_precio_actual() -> float:
+    # Ejemplo usando la tasa del BCV (o reemplazar por cualquier web objetivo)
+    url = "https://www.bcv.org.ve/"
+    response = httpx.get(url, verify=False)
+    soup = BeautifulSoup(response.text, "html.parser")
+    
+    div_dolar = soup.find("div", id="dolar")
+    texto_precio = div_dolar.find("strong").text.strip().replace(",", ".")
+    return float(texto_precio)
+
+def verificar_cambios():
+    precio_actual = obtener_precio_actual()
+    precio_anterior = None
+
+    # 1. Cargar precio guardado previamente
+    if os.path.exists(FILE_DATA):
+        with open(FILE_DATA, "r") as f:
+            datos = json.load(f)
+            precio_anterior = datos.get("precio")
+
+    # 2. Comparar precios
+    if precio_anterior is None:
+        # Primera ejecución
+        mensaje = f"📊 <b>Monitoreo Iniciado</b>\nPrecio inicial registrado: <b>{precio_actual} USD</b>"
+        enviar_alerta(mensaje)
+    elif precio_actual != precio_anterior:
+        diferencia = round(precio_actual - precio_anterior, 4)
+        emoji = "📈" if diferencia > 0 else "📉"
+        
+        mensaje = (
+            f"{emoji} <b>¡Alerta de Cambio de Precio!</b>\n\n"
+            f"<b>Precio anterior:</b> {precio_anterior}\n"
+            f"<b>Precio nuevo:</b> {precio_actual}\n"
+            f"<b>Variación:</b> {diferencia}"
+        )
+        enviar_alerta(mensaje)
+    else:
+        print("El precio no ha cambiado. No se envía alerta.")
+
+    # 3. Guardar el precio actual
+    with open(FILE_DATA, "w") as f:
+        json.dump({"precio": precio_actual}, f)
+
+if __name__ == "__main__":
+    verificar_cambios()
